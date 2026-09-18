@@ -1,0 +1,17 @@
+# Godot/editor generated state
+.godot/
+
+# Local/CI output
+builds/
+*.apk
+*.aab
+*.log
+
+# Python authoring/test caches
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# OS/editor crumbs
+.DS_Store
+Thumbs.db

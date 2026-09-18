@@ -1,0 +1,238 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GODOT_VERSION: "4.7.2"
+      GODOT_STATUS: "stable"
+      ANDROID_PLATFORM: "35"
+      ANDROID_BUILD_TOOLS: "35.0.1"
+      GODOT_ANDROID_KEYSTORE_DEBUG_PATH: ${{ github.workspace }}/ci/deadlane-development.keystore
+      GODOT_ANDROID_KEYSTORE_DEBUG_USER: "deadlane-dev"
+      GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: "deadlanedev2026"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare diagnostics directory
+        shell: bash
+        run: mkdir -p builds/screenshots
+
+      - name: Static repository validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            tools/static_validate.py \
+            tests/balance_simulation.py \
+            tools/generate_models.py \
+            tools/generate_environment_models.py \
+            tools/generate_surface_textures_v14.py \
+            tools/generate_graphics_v15.py
+          python3 tools/static_validate.py 2>&1 | tee builds/static-validation.log
+
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android command-line tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # Do not use android-actions/setup-android here. Current ubuntu-24.04
+          # runners ship an older sdkmanager and setup-android@v3 attempts to
+          # replace it with cmdline-tools 16.0, which can fail while accepting
+          # licenses. Use Google's current CLI package directly instead.
+          CLI_BUILD="15859902"
+          CLI_SHA256="4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583"
+          CLI_ZIP="$RUNNER_TEMP/android-commandlinetools.zip"
+          CLI_DIR="$RUNNER_TEMP/android-commandlinetools"
+          rm -rf "$CLI_DIR" "$CLI_ZIP"
+          mkdir -p "$CLI_DIR"
+          curl -fL --retry 4 --retry-all-errors --connect-timeout 20 \
+            -o "$CLI_ZIP" \
+            "https://dl.google.com/android/repository/commandlinetools-linux-${CLI_BUILD}_latest.zip"
+          echo "${CLI_SHA256}  ${CLI_ZIP}" | sha256sum -c -
+          unzip -q "$CLI_ZIP" -d "$CLI_DIR"
+          SDKMANAGER="$CLI_DIR/cmdline-tools/bin/sdkmanager"
+          test -x "$SDKMANAGER"
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          "$SDKMANAGER" --version 2>&1 | tee builds/sdkmanager-version.log
+
+      - name: Install pinned Android packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${ANDROID_HOME:-}"
+          test -d "$ANDROID_HOME"
+          test -x "$SDKMANAGER"
+
+          # Capture sdkmanager's status rather than `yes`' SIGPIPE status.
+          set +o pipefail
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses \
+            > builds/android-sdk-licenses.log 2>&1
+          LICENSE_STATUS=${PIPESTATUS[1]}
+          set -o pipefail
+          cat builds/android-sdk-licenses.log
+          if [ "$LICENSE_STATUS" -ne 0 ]; then
+            echo "Android license acceptance failed with sdkmanager status $LICENSE_STATUS"
+            exit "$LICENSE_STATUS"
+          fi
+
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
+            "platform-tools" \
+            "build-tools;35.0.1" \
+            "platforms;android-35" \
+            "cmake;3.10.2.4988404" \
+            "ndk;28.1.13356709" 2>&1 | tee builds/android-sdk-install.log
+
+          java -version 2>&1 | tee builds/java-version.log
+          "$ANDROID_HOME/platform-tools/adb" version 2>&1 | tee builds/adb-version.log || true
+          test -x "$ANDROID_HOME/build-tools/35.0.1/apksigner"
+          test -d "$ANDROID_HOME/platforms/android-35"
+          test -d "$ANDROID_HOME/ndk/28.1.13356709"
+          test -d "$ANDROID_HOME/cmake/3.10.2.4988404"
+
+      - name: Install Godot 4.7.2 and matching templates
+        shell: bash
+        run: |
+          set -euxo pipefail
+          BASE="https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable"
+          curl -fL --retry 4 --retry-all-errors --connect-timeout 20 -o /tmp/godot.zip "$BASE/Godot_v4.7.2-stable_linux.x86_64.zip"
+          echo "cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4  /tmp/godot.zip" | sha256sum -c -
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          sudo install -m 0755 /tmp/godot/Godot_v4.7.2-stable_linux.x86_64 /usr/local/bin/godot
+          godot --version 2>&1 | tee builds/godot-version.log
+          grep -q '^4\.7\.2\.stable' builds/godot-version.log
+
+          curl -fL --retry 4 --retry-all-errors --connect-timeout 20 -o /tmp/templates.tpz "$BASE/Godot_v4.7.2-stable_export_templates.tpz"
+          echo "f298490b8d44d934be425a5a65a51bf15f422428b229a06a6e11d9ffea248011  /tmp/templates.tpz" | sha256sum -c -
+          mkdir -p "$HOME/.local/share/godot/export_templates/4.7.2.stable"
+          rm -rf /tmp/godot-templates
+          mkdir -p /tmp/godot-templates
+          unzip -q /tmp/templates.tpz -d /tmp/godot-templates
+          test -d /tmp/godot-templates/templates
+          cp -a /tmp/godot-templates/templates/. "$HOME/.local/share/godot/export_templates/4.7.2.stable/"
+          test -n "$(find "$HOME/.local/share/godot/export_templates/4.7.2.stable" -maxdepth 1 -type f -print -quit)"
+          find "$HOME/.local/share/godot/export_templates/4.7.2.stable" -maxdepth 1 -type f -printf '%f\n' | sort | tee builds/template-files.log
+
+      - name: Configure Godot Android paths
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$HOME/.config/godot"
+          cat > "$HOME/.config/godot/editor_settings-4.7.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          export/android/debug_keystore = "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH"
+          export/android/debug_keystore_user = "$GODOT_ANDROID_KEYSTORE_DEBUG_USER"
+          export/android/debug_keystore_pass = "$GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD"
+          export/android/shutdown_adb_on_exit = false
+          EOF
+          test -x "$JAVA_HOME/bin/java"
+          test -x "$ANDROID_HOME/platform-tools/adb"
+          test -s "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH"
+          keytool -list -keystore "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH" \
+            -storepass "$GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD" \
+            -alias "$GODOT_ANDROID_KEYSTORE_DEBUG_USER" >/dev/null
+          cat "$HOME/.config/godot/editor_settings-4.7.tres" | sed 's/debug_keystore_pass = .*/debug_keystore_pass = "***"/' | tee builds/editor-settings.log
+          godot --headless --path . --script res://tools/configure_ci.gd 2>&1 | tee builds/configure-ci.log
+
+      - name: Import project and compile scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          godot --headless --path . --import --quit 2>&1 | tee builds/import.log
+          if grep -E "SCRIPT ERROR|Parse Error|Compile Error|Failed to load script" builds/import.log; then
+            echo "Godot reported a script/import compilation error."
+            exit 1
+          fi
+
+      - name: Check command-line test scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          for script in tests/test_runner.gd tools/capture_screens.gd tools/configure_ci.gd; do
+            echo "Checking $script"
+            godot --headless --path . --check-only --script "res://$script" 2>&1
+          done | tee builds/cli-script-check.log
+
+      - name: Targeted engine tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          godot --headless --path . --script res://tests/test_runner.gd 2>&1 | tee builds/engine-tests.log
+          grep -q "ALL ENGINE TESTS PASSED" builds/engine-tests.log
+          if grep -E "SCRIPT ERROR|Parse Error|Compile Error|ENGINE TEST FAILURES" builds/engine-tests.log; then
+            exit 1
+          fi
+
+      - name: Deterministic balance simulation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/balance_simulation.py 2>&1 | tee builds/balance-simulation.txt
+
+      - name: Install virtual display for screenshot check
+        continue-on-error: true
+        shell: bash
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb libgl1-mesa-dri
+
+      - name: Capture representative rendered screens
+        continue-on-error: true
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        shell: bash
+        run: |
+          set -o pipefail
+          xvfb-run -a -s "-screen 0 720x1280x24" godot --path . --script res://tools/capture_screens.gd 2>&1 | tee builds/screenshot.log
+
+      - name: Export signed development APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          godot --headless --path . --export-debug "Android Debug" builds/DEADLANE-Zombie-Bridge-debug.apk 2>&1 | tee builds/export.log
+          test -s builds/DEADLANE-Zombie-Bridge-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.1/apksigner" verify --verbose --print-certs builds/DEADLANE-Zombie-Bridge-debug.apk 2>&1 | tee builds/apksigner.log
+          sha256sum builds/DEADLANE-Zombie-Bridge-debug.apk | tee builds/DEADLANE-Zombie-Bridge-debug.apk.sha256
+
+      - name: Upload APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DEADLANE-Android-Debug
+          path: |
+            builds/DEADLANE-Zombie-Bridge-debug.apk
+            builds/DEADLANE-Zombie-Bridge-debug.apk.sha256
+            builds/apksigner.log
+            builds/screenshots/*.png
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload CI diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DEADLANE-CI-Diagnostics
+          path: |
+            builds/*.log
+            builds/*.txt
+            builds/screenshots/*.png
+          if-no-files-found: warn
+          retention-days: 30

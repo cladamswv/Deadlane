@@ -1,0 +1,77 @@
+{
+  "weapons": {
+    "assault_rifle": {
+      "damage": 20,
+      "fire_rate": 7.0,
+      "range": 34.0,
+      "pellets": 1,
+      "spread": 0.0025,
+      "penetration": 0,
+      "sound": "rifle"
+    },
+    "smg": {
+      "damage": 11,
+      "fire_rate": 12.0,
+      "range": 28.0,
+      "pellets": 1,
+      "spread": 0.006,
+      "penetration": 0,
+      "sound": "smg"
+    },
+    "shotgun": {
+      "damage": 15,
+      "fire_rate": 1.5,
+      "range": 14.0,
+      "pellets": 8,
+      "spread": 0.034,
+      "penetration": 0,
+      "sound": "shotgun"
+    },
+    "piercer": {
+      "damage": 65,
+      "fire_rate": 1.8,
+      "range": 34.0,
+      "pellets": 1,
+      "spread": 0.001,
+      "penetration": 2,
+      "sound": "piercer"
+    }
+  },
+  "enemies": {
+    "shambler": {
+      "hp": 40,
+      "speed": 2.6,
+      "breach_damage": 8,
+      "hit_radius": 0.42,
+      "score": 40
+    },
+    "runner": {
+      "hp": 25,
+      "speed": 4.8,
+      "breach_damage": 6,
+      "hit_radius": 0.34,
+      "score": 50
+    },
+    "armored": {
+      "hp": 140,
+      "speed": 2.0,
+      "breach_damage": 16,
+      "hit_radius": 0.48,
+      "score": 140
+    },
+    "brute": {
+      "hp": 220,
+      "speed": 1.7,
+      "breach_damage": 25,
+      "hit_radius": 0.62,
+      "score": 220
+    },
+    "spitter": {
+      "hp": 65,
+      "speed": 2.2,
+      "breach_damage": 10,
+      "hit_radius": 0.46,
+      "score": 100
+    }
+  }
+}
